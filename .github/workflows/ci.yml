@@ -82,8 +82,15 @@ jobs:
           cache-to: type=gha, mode=max 
       - name: Trivy Gate (HIGH/CRITICAL with a fix available fails the run) 
         run: | 
-        docker run --rm \ -v /var/run/docker.sock:/var/run/docker.sock \ aquasec/trivy:${TRIVY_VERSION} image \ --scanners vuln \
-        --severity HIGH,CRITICAL\ --ignore-unfixed \ --exit-code 1 \ "${IMAGE_NAME}:${GITHUB_SHA}"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:${TRIVY_VERSION} image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "${IMAGE_NAME}:${GITHUB_SHA}"
+
       - name: Save scanned image 
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with: 
