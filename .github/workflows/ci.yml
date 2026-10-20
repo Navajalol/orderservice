@@ -93,7 +93,7 @@ jobs:
 
       - name: Save scanned image 
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: docker save "${IMAGE_NAME}:${GITHUB_SHA}" -0 image.tar
+        run: docker save "${IMAGE_NAME}:${GITHUB_SHA}" -o image.tar
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'  
         with: 
@@ -166,7 +166,7 @@ jobs:
           echo "expected=$TAG"
           echo "actual=$ACTUAL"
           test "$ACTUAL" = "$TAG"
-  
+
       - name: Container logs (on failure) 
         if: failure()
         run: docker logs "$CONTAINER" || true 
