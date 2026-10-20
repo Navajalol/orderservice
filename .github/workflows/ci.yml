@@ -55,6 +55,7 @@ jobs:
         with: 
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Cache NuGet packages 
+        uses: actions/cache@v4
         with: 
           path: ~/.nuget/packages
           key: nuget-${{runner.os}}-${{hashFiles('**/*csproj')}}
@@ -62,10 +63,9 @@ jobs:
       - run: dotnet restore
       - run: dotnet build -c Release --no-restore
       - run: dotnet test -c Release --no-build
-      - run: dotnet test 
       - run: dotnet list package --vulnerable --include-transitive
 
-  image-bulid-scan:
+  image-build-scan:
     needs: build-test 
     runs-on: ubuntu-latest 
     steps: 
@@ -75,11 +75,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: . 
-          tags: ${{ eng.IMAGE_NAME}}:${{github.sha}}
+          tags: ${{ env.IMAGE_NAME}}:${{github.sha}}
           load: true
           pull: true
           cache-from: type=gha
-          cache-to: type=gha, mode=max 
+          cache-to: type=gha,mode=max 
       - name: Trivy Gate (HIGH/CRITICAL with a fix available fails the run) 
         run: | 
           docker run --rm \
@@ -93,6 +93,9 @@ jobs:
 
       - name: Save scanned image 
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: docker save "${IMAGE_NAME}:${GITHUB_SHA}" -0 image.tar
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'  
         with: 
           name: image
           path: image.tar 
@@ -102,7 +105,7 @@ jobs:
     needs: image-build-scan
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    premissions: 
+    permissions: 
       contents: read
       packages: write
     steps: 
@@ -116,19 +119,19 @@ jobs:
           username: ${{github.actor}}
           password: ${{secrets.GITHUB_TOKEN}}
       - name: Tag and puch to GHCR 
-      run: | 
-      TARGET="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${GITHUB_SHA}"
-      docker tag "${IMAGE_NAME}:{GITHUB_SHA}" "$TARGET"
-      docker push "$TARGET"
-      echo "Pushed \ `$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
+        run: | 
+            TARGET="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${GITHUB_SHA}"
+            docker tag "${IMAGE_NAME}:${GITHUB_SHA}" "$TARGET"
+            docker push "$TARGET" 
+            echo "Pushed \`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     needs: push
     if: >- 
       !cancelled() &&
-      github.ref == 'refs/heads/main' && (needs.pus.result == 'success' || github.event_name = 'workflow_dispatch' && inputs.redeploy_only)
+      github.ref == 'refs/heads/main' && (needs.push.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.redeploy_only))
     runs-on: ubuntu-latest
-    premissions: 
+    permissions: 
       contents: read
       packages: read 
     concurrency: 
@@ -145,7 +148,7 @@ jobs:
           password: ${{secrets.GITHUB_TOKEN}}
       - name: Pull image 
         run: | 
-            IMAGE ="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${TAG}"
+            IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${TAG}"
             echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
             docker pull "$IMAGE"
 
@@ -153,17 +156,17 @@ jobs:
         run: | 
           docker stop "$CONTAINER" 2>/dev/null || true 
           docker rm "$CONTAINER" 2>/dev/null || true 
-          docker run -d --name "$CONTAINER" \ 
-            -p 8080:8080 \ 
+          docker run -d --name "$CONTAINER" \
+            -p 8080:8080 \
             -e APP_VERSION="$TAG" \
             "$IMAGE"  
       - name: Verify /version matches the deployed tag 
         run: | 
-          ACTUAL=$(curl --silent --fail --retry 10 --retry-connrefused --retry-delay 2 \ http://localhose:8080/version)
+          ACTUAL=$(curl --silent --fail --retry 10 --retry-connrefused --retry-delay 2 \http://localhost:8080/version)
           echo "expected=$TAG"
           echo "actual=$ACTUAL"
           test "$ACTUAL" = "$TAG"
-
+  
       - name: Container logs (on failure) 
         if: failure()
         run: docker logs "$CONTAINER" || true 
