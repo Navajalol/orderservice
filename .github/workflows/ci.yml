@@ -1,0 +1,162 @@
+name: CI 
+
+on: 
+  push: 
+    branches: [main]
+  pull_request: 
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      redeploy_only:
+        description: "Skip build/scan/push and jsut redeploy an existing image"
+        type: boolean
+        default: false 
+
+      image_tag:
+        description: "Image tag to redeploy (blank=latest commit SHA on the selected branch)"
+        type: string
+        default: ""
+        
+permissions: 
+  contents: read 
+
+env: 
+  DOTNET_VERSION: "8.0.x"
+  IMAGE_NAME: orderservice
+  TRIVY_VERSION: "0.76.0"
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true 
+
+jobs: 
+  format: 
+    if: ${{ !inputs.redeploy_only }}
+    runs-on: ubuntu-latest
+    steps: 
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Cache NuGet packages 
+        uses: actions/cache@v4
+        with: 
+          path: ~/.nuget/packages
+          key: nuget-${{runner.os}}-${{hashFiles('**/*csproj')}}
+          restore-keys: nuget-${{runner.os}}-
+      - run: dotnet restore 
+      - name: Format check (fails on any diff)
+        run: dotnet format --verify-no-changes --no-restore
+  
+  build-test: 
+    needs: format
+    runs-on: ubuntu-latest
+    steps: 
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: 
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Cache NuGet packages 
+        with: 
+          path: ~/.nuget/packages
+          key: nuget-${{runner.os}}-${{hashFiles('**/*csproj')}}
+          restore-keys: nuget-${{runner.os}}-
+      - run: dotnet restore
+      - run: dotnet build -c Release --no-restore
+      - run: dotnet test -c Release --no-build
+      - run: dotnet test 
+      - run: dotnet list package --vulnerable --include-transitive
+
+  image-bulid-scan:
+    needs: build-test 
+    runs-on: ubuntu-latest 
+    steps: 
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (Docker layer cache stored in GitHub Actions cache )
+        uses: docker/build-push-action@v6
+        with:
+          context: . 
+          tags: ${{ eng.IMAGE_NAME}}:${{github.sha}}
+          load: true
+          pull: true
+          cache-from: type=gha
+          cache-to: type=gha, mode=max 
+      - name: Trivy Gate (HIGH/CRITICAL with a fix available fails the run) 
+        run: | 
+        docker run --rm \ -v /var/run/docker.sock:/var/run/docker.sock \ aquasec/trivy:${TRIVY_VERSION} image \ --scanners vuln \
+        --severity HIGH,CRITICAL\ --ignore-unfixed \ --exit-code 1 \ "${IMAGE_NAME}:${GITHUB_SHA}"
+      - name: Save scanned image 
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with: 
+          name: image
+          path: image.tar 
+          retention-days: 1 
+
+  push: 
+    needs: image-build-scan
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    premissions: 
+      contents: read
+      packages: write
+    steps: 
+      - uses: actions/download-artifact@v4
+        with:   
+          name: image
+      - run: docker load -i image.tar
+      - uses: docker/login-action@v3
+        with: 
+          registry: ghcr.io 
+          username: ${{github.actor}}
+          password: ${{secrets.GITHUB_TOKEN}}
+      - name: Tag and puch to GHCR 
+      run: | 
+      TARGET="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${GITHUB_SHA}"
+      docker tag "${IMAGE_NAME}:{GITHUB_SHA}" "$TARGET"
+      docker push "$TARGET"
+      echo "Pushed \ `$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: push
+    if: >- 
+      !cancelled() &&
+      github.ref == 'refs/heads/main' && (needs.pus.result == 'success' || github.event_name = 'workflow_dispatch' && inputs.redeploy_only)
+    runs-on: ubuntu-latest
+    premissions: 
+      contents: read
+      packages: read 
+    concurrency: 
+      group: deploy-production
+      cancel-in-progress: false 
+    env: 
+      TAG: ${{ inputs.image_tag || github.sha}} 
+      CONTAINER: orderservice-prod
+    steps: 
+      - uses: docker/login-action@v3
+        with: 
+          registry: ghcr.io
+          username: ${{github.actor}}
+          password: ${{secrets.GITHUB_TOKEN}}
+      - name: Pull image 
+        run: | 
+            IMAGE ="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${TAG}"
+            echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+            docker pull "$IMAGE"
+
+      - name: Replace running container 
+        run: | 
+          docker stop "$CONTAINER" 2>/dev/null || true 
+          docker rm "$CONTAINER" 2>/dev/null || true 
+          docker run -d --name "$CONTAINER" \ 
+            -p 8080:8080 \ 
+            -e APP_VERSION="$TAG" \
+            "$IMAGE"  
+      - name: Verify /version matches the deployed tag 
+        run: | 
+          ACTUAL=$(curl --silent --fail --retry 10 --retry-connrefused --retry-delay 2 \ http://localhose:8080/version)
+          echo "expected=$TAG"
+          echo "actual=$ACTUAL"
+          test "$ACTUAL" = "$TAG"
+
+      - name: Container logs (on failure) 
+        if: failure()
+        run: docker logs "$CONTAINER" || true 
