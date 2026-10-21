@@ -65,6 +65,31 @@ jobs:
       - run: dotnet test -c Release --no-build
       - run: dotnet list package --vulnerable --include-transitive
 
+  dependency-scan:
+    needs: build-test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with: 
+        dotnet-version: ${{env.DOTNET_VERSION}}
+    - name: Cache NuGet packages 
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{runner.os}}-${{ hashFiles('**/*.csproj') }}
+        restore-keys: nuget-${{runner.os}}
+    - run: dotnet restore
+    - name: List vulnerable packages (report only)
+      run: | 
+        dotnet list package --vulnerable --include-transitive | tee vuln-report.txt
+        {
+          echo "### NuGet vulnerability report" 
+          echo '```'
+          cat vuln-report.txt
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
   image-build-scan:
     needs: build-test 
     runs-on: ubuntu-latest 
