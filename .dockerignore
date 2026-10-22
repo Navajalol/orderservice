@@ -5,7 +5,7 @@ obj/
 .github/
 .vs/
 .vscode/
-*/md
+*.md
 Dockerfile
 .dockerignore
 
