@@ -63,7 +63,6 @@ jobs:
       - run: dotnet restore
       - run: dotnet build -c Release --no-restore
       - run: dotnet test -c Release --no-build
-      - run: dotnet list package --vulnerable --include-transitive
 
   dependency-scan:
     needs: build-test
@@ -104,7 +103,7 @@ jobs:
           load: true
           pull: true
           cache-from: type=gha
-          cache-to: type=gha,mode=max 
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: Trivy Gate (HIGH/CRITICAL with a fix available fails the run) 
         run: | 
           docker run --rm \
