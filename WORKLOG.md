@@ -1,6 +1,8 @@
 WORKLOG: 
 Environment: Ubuntu , .NET 8 SDK, version 20.10.18, Trivy 0.76.0.
 
+Manual Redeploy run link: https://github.com/Navajalol/orderservice/actions/runs/39831769341 
+
 WHAT WENT WRONG:
 
 Issue: "APP_VERSION=1.0.0-test dotnet run &" not working 
