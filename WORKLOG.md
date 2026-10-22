@@ -7,7 +7,7 @@ Issue: "APP_VERSION=1.0.0-test dotnet run &" not working
 
 Fix: noticed the original dotnet run & was still running in the background so I had to kill the instance using its PID and then run using the variable 
 
-Using SharpZipLib version 1.2.0 and Newtonsoft.json version 10.0.1 for the vulberable checks: Both newton soft have both High and Moderate severity 
+Using SharpZipLib version 1.2.0 and Newtonsoft.json version 9.0.1 for the vulnerable checks: Both newton soft have both High and Moderate severity 
 vulnerable packages 
 
 Issue: Docker Permission denied: 
@@ -15,7 +15,7 @@ Issue: Docker Permission denied:
 Fix: Adding my computer user into the docker group so I do not have to user root using sudo usermod -aG docker $USER
 
 Test links showing the gates are working successfully in a test environment: https://github.com/Navajalol/orderservice/pull/1, https://github.com/Navajalol/orderservice/pull/3;
-Pull 1 failed at the format gate and pull 3 failled at the Trivy gate. 
+Pull 1 failed at the format gate and pull 3 failed at the Trivy gate. 
 
 
 QUESTIONS:
@@ -24,7 +24,8 @@ Question: why do we care if the container runs as root, and what did you have to
 
 Answer: We care if the container runs on root because root has a much higher authorization on a setup than a user with less authority on the system. This means that
 if the app is somehow compromised by malignant users, they will not be able to access system paths and wont be able to install malicious programs in that system.
-What I changed to make USER appuser work was to create the user in run stage, where the user is created and deleted everytime a run starts or ends. To make USER appuser work I had to create the user in the runtime stage using "RUN adduser --disabled-password --gecos "" appuser.
+With using "RUN adduser --disabled-password --gecos"" appuser" the user is created whenever the image is built and every container in the image runs as that user also I had to keep 
+the app on port 8080 because non root users cant bind to ports below 1024.
 
 Question: what's the actual risk of docker run with no restart policy and no health-based rollback, and what's the smallest
 change that reduces it?
@@ -45,19 +46,17 @@ can cause issues if there insufficient processing power for these checks.
 
 Question: Where do secrets live in your pipeline? What's the blast radius if one leaks into a log line?
 
-Answer: There are no secretes in my pipeline, the only credential being used is "GITHUB_TOKEN" which is built-in on GitHub. The token is created for each job and is revoked when the job ends.
+Answer: There are no secrets in my pipeline, the only credential being used is "GITHUB_TOKEN" which is built-in on GitHub. The token is created for each job and is revoked when the job ends.
 If the token leaked into a log line the biggest issue would be if an attacker is able to obtain the push token where the attacker then can push malicious image onto the deployment.
 However, the token only exist as the job is working so it would only be in a couple of minutes that the attack could happen.
 
 Question: Your Trivy gate uses --ignore-unfixed. A base-image CVE that had no fix gets one next month. Nothing in your pipeline catches that automatically. What's the gap, how do you close it?
 
-Answer: The gap happens because the piepline only scans the image once when its built, and it is only built manually. So the only time it would get the fix is when someone manually deploys the image
-again, however that could be months. A way to fix this is to have a daily rerun of the trivy gate against the image that is currently deployed to check for any updates and fixes. Then, we can schedule
-to update the image whenever it finds a difference between the current and new image.
+Answer: The gap happens because the image is only built and scanned when it is pused to main, if no one pushes anything to main for a long time the update will never be pushed onto main. A way to fix this is to have a daily rerun of the trivy gate against the image that is currently deployed to check for any updates and fixes. Then, we can schedule to update the image whenever it finds a difference between the current and new image.
 
 Question: If this needed 3 replicas behind a load balancer instead of one docker run, what's the smallest realistic next step — and what would you explicitly not try to solve with a Dockerfile change alone?
 
-Answer: The next smallest realistic step would be instead of using docker run everytime, I could use an orchetrator service where only the deploy changes, where it points to a new image and waits for the for it to come back stable. With this we can deploy new images with no downtime for the application which makes it very useful for scaling and rolling back. Any of the uses of the orchestrator that involves all 3 replicas I would not try to solve with a dockerfile change alone, so Load balancing, Deploys, Rollbacks, and configurations for each environment.
+Answer: The next smallest realistic step would be instead of using docker run everytime, I could use an orchestrator service where only the deploy changes, where it points to a new image and waits for the for it to come back stable. With this we can deploy new images with no downtime for the application which makes it very useful for scaling and rolling back. Any of the uses of the orchestrator that involves all 3 replicas I would not try to solve with a dockerfile change alone, so Load balancing, Deploys, Rollbacks, and configurations for each environment.
 
 
 
